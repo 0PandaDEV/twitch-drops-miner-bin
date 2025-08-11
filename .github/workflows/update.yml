@@ -1,0 +1,53 @@
+name: Update PKGBUILD
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Get latest successful build info
+        id: get_build
+        run: |
+          # Using the GitHub CLI for API calls:
+          # Get the latest successful workflow run from DevilXD/TwitchDropsMiner.
+          LATEST_RUN=$(gh run list --repo DevilXD/TwitchDropsMiner --limit 1 --json database,status --jq '.[] | select(.status=="completed")')
+          echo "Latest run: $LATEST_RUN"
+          # Extract a version identifier – you could use run id timestamps or similar.
+          NEW_VER=$(date +%Y%m%d%H%M)
+          echo "New version: $NEW_VER"
+          echo "::set-output name=new_ver::$NEW_VER"
+          # Download artifacts (assuming artifacts are not zipped) for each architecture.
+          for arch in x86_64 aarch64; do
+            ARTIFACT_NAME="Twitch.Drops.Miner.Linux.AppImage-${arch}"
+            echo "Downloading $ARTIFACT_NAME..."
+            # Download artifact using GH CLI – the downloaded file will be artifact.tar.gz (or similar).
+            gh run download --repo DevilXD/TwitchDropsMiner --name "$ARTIFACT_NAME" --dir artifacts/$arch
+            # Assume the artifact is directly the AppImage; if archived, extract it.
+            cp artifacts/$arch/* appimage-${arch}
+            HASH=$(sha256sum appimage-${arch} | awk '{print $1}')
+            echo "${arch} hash: $HASH"
+            echo "::set-output name=${arch}_hash::$HASH"
+          done
+
+      - name: Update PKGBUILD file version and hashes
+        run: |
+          NEW_VER="${{ steps.get_build.outputs.new_ver }}"
+          X86_HASH="${{ steps.get_build.outputs.x86_64_hash }}"
+          ARM_HASH="${{ steps.get_build.outputs.aarch64_hash }}"
+          echo "Updating PKGBUILD to version $NEW_VER"
+          sed -i "s/pkgver=.*/pkgver=$NEW_VER/" PKGBUILD
+          sed -i "/x86_64/s/sha256sums=('.*')/sha256sums=('$X86_HASH')/" PKGBUILD
+          sed -i "/aarch64/s/sha256sums=('.*')/sha256sums=('$ARM_HASH')/" PKGBUILD
+          # Optionally update source URLs if needed.
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add PKGBUILD
+          git commit -m "chore: update PKGBUILD with new version $NEW_VER"
+          git push
