@@ -12,7 +12,7 @@ provides=(twitch-drops-miner)
 conflicts=(twitch-drops-miner)
 source_x86_64=("Twitch.Drops.Miner.Linux.AppImage-x86_64.zip::https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-x86_64.zip")
 source_aarch64=("Twitch.Drops.Miner.Linux.AppImage-aarch64.zip::https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-aarch64.zip")
-sha256sums_x86_64=('99ff0ea1202cf99df54538e4d8728a6016ee1479774e10c8802fc6be187918ac')
+sha256sums_x86_64=('asd')
 sha256sums_aarch64=('2d2725ebdf9416d20427a55d67705279e9cfde85b2bef81346cc7ccc28731d6e')
 
 prepare() {
