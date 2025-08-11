@@ -1,4 +1,4 @@
-name: Update PKGBUILD
+name: aur-auto-update
 
 on:
   schedule:
@@ -6,48 +6,112 @@ on:
   workflow_dispatch:
 
 jobs:
-  update:
+  check-update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Get latest successful build info
-        id: get_build
+      - uses: actions/checkout@v4
+      - name: Get latest release
+        id: get_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const res = await github.rest.repos.getLatestRelease({
+              owner: 'DevilXD',
+              repo: 'TwitchDropsMiner'
+            });
+            const fs = require('fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${res.data.tag_name}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${res.data.tag_name.replace(/^v/, '')}\n`);
+      - name: Check if update is needed
+        id: check_update
         run: |
-          # Using the GitHub CLI for API calls:
-          # Get the latest successful workflow run from DevilXD/TwitchDropsMiner.
-          LATEST_RUN=$(gh run list --repo DevilXD/TwitchDropsMiner --limit 1 --json database,status --jq '.[] | select(.status=="completed")')
-          echo "Latest run: $LATEST_RUN"
-          # Extract a version identifier – you could use run id timestamps or similar.
-          NEW_VER=$(date +%Y%m%d%H%M)
-          echo "New version: $NEW_VER"
-          echo "::set-output name=new_ver::$NEW_VER"
-          # Download artifacts (assuming artifacts are not zipped) for each architecture.
-          for arch in x86_64 aarch64; do
-            ARTIFACT_NAME="Twitch.Drops.Miner.Linux.AppImage-${arch}"
-            echo "Downloading $ARTIFACT_NAME..."
-            # Download artifact using GH CLI – the downloaded file will be artifact.tar.gz (or similar).
-            gh run download --repo DevilXD/TwitchDropsMiner --name "$ARTIFACT_NAME" --dir artifacts/$arch
-            # Assume the artifact is directly the AppImage; if archived, extract it.
-            cp artifacts/$arch/* appimage-${arch}
-            HASH=$(sha256sum appimage-${arch} | awk '{print $1}')
-            echo "${arch} hash: $HASH"
-            echo "::set-output name=${arch}_hash::$HASH"
-          done
-
-      - name: Update PKGBUILD file version and hashes
+          PKGVER=$(grep pkgver PKGBUILD | head -n1 | cut -d'=' -f2 | tr -d ' ')
+          echo "Current pkgver: $PKGVER"
+          echo "Latest version: ${{ steps.get_release.outputs.version }}"
+          if [ "$PKGVER" = "${{ steps.get_release.outputs.version }}" ]; then
+            echo "No update needed."
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "update_needed=true" >> $GITHUB_OUTPUT
+      - name: Download AppImages and calculate sha256sums
+        if: steps.check_update.outputs.update_needed == 'true'
         run: |
-          NEW_VER="${{ steps.get_build.outputs.new_ver }}"
-          X86_HASH="${{ steps.get_build.outputs.x86_64_hash }}"
-          ARM_HASH="${{ steps.get_build.outputs.aarch64_hash }}"
-          echo "Updating PKGBUILD to version $NEW_VER"
-          sed -i "s/pkgver=.*/pkgver=$NEW_VER/" PKGBUILD
-          sed -i "/x86_64/s/sha256sums=('.*')/sha256sums=('$X86_HASH')/" PKGBUILD
-          sed -i "/aarch64/s/sha256sums=('.*')/sha256sums=('$ARM_HASH')/" PKGBUILD
-          # Optionally update source URLs if needed.
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add PKGBUILD
-          git commit -m "chore: update PKGBUILD with new version $NEW_VER"
-          git push
+          VERSION=${{ steps.get_release.outputs.version }}
+          wget -O Twitch.Drops.Miner.Linux.AppImage-x86_64.zip https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-x86_64.zip
+          wget -O Twitch.Drops.Miner.Linux.AppImage-aarch64.zip https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-aarch64.zip
+          SHA_X86_64=$(sha256sum Twitch.Drops.Miner.Linux.AppImage-x86_64.zip | awk '{print $1}')
+          SHA_AARCH64=$(sha256sum Twitch.Drops.Miner.Linux.AppImage-aarch64.zip | awk '{print $1}')
+          echo "SHA_X86_64=$SHA_X86_64" >> $GITHUB_ENV
+          echo "SHA_AARCH64=$SHA_AARCH64" >> $GITHUB_ENV
+      - name: Update PKGBUILD and .SRCINFO
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          VERSION=${{ steps.get_release.outputs.version }}
+
+          # Update PKGBUILD
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+          sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$SHA_X86_64')/" PKGBUILD
+          sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$SHA_AARCH64')/" PKGBUILD
+
+          # Update .SRCINFO
+          sed -i "s/^[[:space:]]*pkgver = .*/\tpkgver = $VERSION/" .SRCINFO
+          sed -i "s/^[[:space:]]*sha256sums_x86_64 = .*/\tsha256sums_x86_64 = $SHA_X86_64/" .SRCINFO
+          sed -i "s/^[[:space:]]*sha256sums_aarch64 = .*/\tsha256sums_aarch64 = $SHA_AARCH64/" .SRCINFO
+      - name: Commit and push to AUR
+        if: steps.check_update.outputs.update_needed == 'true'
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      - name: Add AUR host key
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
+          echo "aur.archlinux.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDKF9vAFWdgm9Bi8uc+tYRBmXASBb5cB5iZsB7LOWWFeBrLp3r14w0/9S2vozjgqY5sJLDPONWoTTaVTbhe3vwO8CBKZTEt1AcWxuXNlRnk9FliR1/eNB9uz/7y1R0+c1Md+P98AJJSJWKN12nqIDIhjl2S1vOUvm7FNY43fU2knIhEbHybhwWeg+0wxpKwcAd/JeL5i92Uv03MYftOToUijd1pqyVFdJvQFhqD4v3M157jxS5FTOBrccAEjT+zYmFyD8WvKUa9vUclRddNllmBJdy4NyLB8SvVZULUPrP3QOlmzemeKracTlVOUG1wsDbxknF1BwSCU7CmU6UFP90kpWIyz66bP0bl67QAvlIc52Yix7pKJPbw85+zykvnfl2mdROsaT8p8R9nwCdFsBc9IiD0NhPEHcyHRwB8fokXTajk2QnGhL+zP5KnkmXnyQYOCUYo3EKMXIlVOVbPDgRYYT/XqvBuzq5S9rrU70KoI/S5lDnFfx/+lPLdtcnnEPk=" >> ~/.ssh/known_hosts
+          echo "aur.archlinux.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMiLrP8pVi5BFX2i3vepSUnpedeiewE5XptnUnau+ZoeUOPkpoCgZZuYfpaIQfhhJJI5qgnjJmr4hyJbe/zxow=" >> ~/.ssh/known_hosts
+      - name: Set up Git
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          git config --global user.email "70103896+0PandaDEV@users.noreply.github.com"
+          git config --global user.name "0PandaDEV"
+      - name: Commit and push changes
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          git add PKGBUILD .SRCINFO LICENSE
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update to ${{ steps.get_release.outputs.version }}"
+
+          # Push to GitHub first
+          git push origin master
+
+          # Prepare AUR-only version working with existing history
+          git remote add aur ssh://aur@aur.archlinux.org/twitch-drops-miner-bin.git
+          git fetch aur master
+
+          # Create branch based on AUR history
+          git checkout -b aur-temp aur/master
+
+          # Update files to match our version
+          git checkout master -- PKGBUILD .SRCINFO LICENSE
+
+          # Remove .github directory if it exists in AUR
+          if [ -d ".github" ]; then
+            git rm -rf .github
+          fi
+
+          # Commit the changes
+          git add PKGBUILD .SRCINFO LICENSE
+          git commit -m "chore: update to ${{ steps.get_release.outputs.version }}"
+
+          # Push to AUR
+          git push aur aur-temp:master
+
+          # Return to master branch and clean up
+          git checkout master
+          git branch -D aur-temp
