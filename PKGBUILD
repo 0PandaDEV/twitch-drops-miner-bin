@@ -2,7 +2,7 @@
 pkgname=twitch-drops-miner-bin
 pkgver=16.0
 pkgrel=1
-pkgdesc="An app that allows you to AFK mine timed Twitch drops, with automatic drop claiming and channel switching. "
+pkgdesc="An app that allows you to AFK mine timed Twitch drops, with automatic drop claiming and channel switching."
 arch=(x86_64 aarch64)
 url="https://github.com/DevilXD/TwitchDropsMiner"
 license=('MIT')
@@ -10,35 +10,59 @@ options=('!strip')
 depends=()
 provides=(twitch-drops-miner)
 conflicts=(twitch-drops-miner)
-source_x86_64=("Twitch.Drops.Miner-x86_64.AppImage::https://github.com/DevilXD/TwitchDropsMiner/actions/runs/16847076869/artifacts/3725324177")
-source_aarch64=("Twitch.Drops.Miner-aarch64.AppImage::https://assets.dataflare.app/release/linux/aarch64/Dataflare.AppImage")
-sha256sums_x86_64=('ec6affea27ca19a696b017647743a66be55306c6e3a206e679f7054122fe6709')
+source_x86_64=("Twitch.Drops.Miner.Linux.AppImage-x86_64.zip::https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-x86_64.zip")
+source_aarch64=("Twitch.Drops.Miner.Linux.AppImage-aarch64.zip::https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-aarch64.zip")
+sha256sums_x86_64=('99ff0ea1202cf99df54538e4d8728a6016ee1479774e10c8802fc6be187918ac')
 sha256sums_aarch64=('2b03cb8ae4588e5ca2a141ee50ae9259db79a5ae9a8322ae13ad18aae8febcf1')
 
+prepare() {
+    # Unzip the AppImage files
+    cd "$srcdir"
+    unzip -q "Twitch.Drops.Miner.Linux.AppImage-${CARCH}.zip"
+}
+
 package() {
-    install -Dm755 *.AppImage "$pkgdir/opt/twitch-drops-miner/twitch-drops-miner.appimage"
+    cd "$srcdir"
     
+    # Find the extracted AppImage file
+    appimage_file=$(find . -name "*.AppImage" -type f | head -1)
+    
+    if [ -z "$appimage_file" ]; then
+        echo "Error: No AppImage file found after extraction"
+        exit 1
+    fi
+    
+    # Make AppImage executable
+    chmod +x "$appimage_file"
+    
+    # Install the AppImage
+    install -Dm755 "$appimage_file" "$pkgdir/opt/twitch-drops-miner/twitch-drops-miner.appimage"
+    
+    # Create wrapper script
     install -dm755 "$pkgdir/usr/bin"
-	cat > "$pkgdir/usr/bin/twitch-drops-miner" << 'EOF'
+    cat > "$pkgdir/usr/bin/twitch-drops-miner" << 'EOF'
 #!/bin/bash
 export APPIMAGE_EXTRACT_AND_RUN=1
 exec /opt/twitch-drops-miner/twitch-drops-miner.appimage "$@"
 EOF
     chmod +x "$pkgdir/usr/bin/twitch-drops-miner"
     
-    chmod +x *.AppImage
-    ./*.AppImage --appimage-extract >/dev/null 2>&1
+    # Extract AppImage to get desktop file and icon
+    "$appimage_file" --appimage-extract >/dev/null 2>&1
     
+    # Install desktop file if found
     if [ -f squashfs-root/*.desktop ]; then
         install -dm755 "$pkgdir/usr/share/applications"
         desktop_file=$(find squashfs-root -name "*.desktop" -type f | head -1)
         sed 's|Exec=.*|Exec=twitch-drops-miner %U|g' "$desktop_file" > "$pkgdir/usr/share/applications/twitch-drops-miner.desktop"
     fi
     
+    # Install icon if found
     png_file=$(find squashfs-root -name "*.png" -type f | head -1)
     if [ -n "$png_file" ]; then
         install -Dm644 "$png_file" "$pkgdir/usr/share/pixmaps/twitch-drops-miner.png"
     fi
     
+    # Clean up extracted files
     rm -rf squashfs-root
 }
