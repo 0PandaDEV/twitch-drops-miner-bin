@@ -8,6 +8,7 @@ url="https://github.com/DevilXD/TwitchDropsMiner"
 license=('MIT')
 options=('!strip')
 depends=()
+makedepends=('unzip')
 provides=(twitch-drops-miner)
 conflicts=(twitch-drops-miner)
 source_x86_64=("Twitch.Drops.Miner.Linux.AppImage-x86_64.zip::https://github.com/DevilXD/TwitchDropsMiner/releases/download/dev-build/Twitch.Drops.Miner.Linux.AppImage-x86_64.zip")
